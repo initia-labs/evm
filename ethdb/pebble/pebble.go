@@ -609,6 +609,7 @@ func (b *batch) Replay(w ethdb.KeyValueWriter) error {
 		if !ok || err != nil {
 			break
 		}
+
 		// The (k,v) slices might be overwritten if the batch is reset/reused,
 		// and the receiver should copy them if they are to be retained long-term.
 		if kind == pebble.InternalKeyKindSet {
