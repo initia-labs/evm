@@ -132,12 +132,11 @@ func NewEVM(blockCtx BlockContext, txCtx TxContext, statedb StateDB, chainConfig
 	return evm
 }
 
-// NewEVMWithPrecompiles returns a new EVM with the given precompiles. The returned EVM is not thread safe and should only ever be used *once*.
-func NewEVMWithPrecompiles(blockCtx BlockContext, txCtx TxContext, statedb StateDB, chainConfig *params.ChainConfig, config Config, precompiles map[common.Address]PrecompiledContract) *EVM {
+// NewEVMWithPrecompiles returns a new EVM with the given precompiled contracts.
+// The returned EVM is not thread safe and should only ever be used *once*.
+func NewEVMWithPrecompiles(blockCtx BlockContext, txCtx TxContext, statedb StateDB, chainConfig *params.ChainConfig, config Config, precompiles PrecompiledContracts) *EVM {
 	evm := NewEVM(blockCtx, txCtx, statedb, chainConfig, config)
-	for addr, p := range precompiles {
-		evm.precompiles[addr] = p
-	}
+	evm.precompiles = precompiles
 	return evm
 }
 
