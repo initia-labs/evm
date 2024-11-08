@@ -261,10 +261,11 @@ func ExtendedRunPrecompiledContract(
 ) {
 	if p, ok := p.(ExtendedPrecompiledContract); ok {
 		output, gasCost, err := p.ExtendedRun(caller, input, suppliedGas, readOnly)
-		if err != nil {
-			return nil, 0, err
-		} else if suppliedGas < gasCost {
+		if err == ErrOutOfGas || suppliedGas < gasCost {
 			return nil, 0, ErrOutOfGas
+		}
+		if logger != nil && logger.OnGasChange != nil {
+			logger.OnGasChange(suppliedGas, suppliedGas-gasCost, tracing.GasChangeCallPrecompiledContract)
 		}
 
 		suppliedGas -= gasCost
