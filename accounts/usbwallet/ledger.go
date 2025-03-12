@@ -21,6 +21,7 @@
 package usbwallet
 
 import (
+	"crypto/ecdsa"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -49,15 +50,18 @@ type ledgerParam1 byte
 type ledgerParam2 byte
 
 const (
-	ledgerOpRetrieveAddress  ledgerOpcode = 0x02 // Returns the public key and Ethereum address for a given BIP 32 path
-	ledgerOpSignTransaction  ledgerOpcode = 0x04 // Signs an Ethereum transaction after having the user validate the parameters
-	ledgerOpGetConfiguration ledgerOpcode = 0x06 // Returns specific wallet application configuration
-	ledgerOpSignTypedMessage ledgerOpcode = 0x0c // Signs an Ethereum message following the EIP 712 specification
+	ledgerOpRetrieveAddress     ledgerOpcode = 0x02 // Returns the public key and Ethereum address for a given BIP 32 path
+	ledgerOpSignTransaction     ledgerOpcode = 0x04 // Signs an Ethereum transaction after having the user validate the parameters
+	ledgerOpGetConfiguration    ledgerOpcode = 0x06 // Returns specific wallet application configuration
+	ledgerOpSignTypedMessage    ledgerOpcode = 0x0c // Signs an Ethereum message following the EIP 712 specification
+	ledgerOpSignPersonalMessage ledgerOpcode = 0x08 // Signs an Ethereum personal message
 
 	ledgerP1DirectlyFetchAddress    ledgerParam1 = 0x00 // Return address directly from the wallet
 	ledgerP1InitTypedMessageData    ledgerParam1 = 0x00 // First chunk of Typed Message data
 	ledgerP1InitTransactionData     ledgerParam1 = 0x00 // First transaction data block for signing
 	ledgerP1ContTransactionData     ledgerParam1 = 0x80 // Subsequent transaction data block for signing
+	ledgerP1PersonalMessageData     ledgerParam1 = 0x00 // First chunk of personal message data
+	ledgerP1ContPersonalMessageData ledgerParam1 = 0x80 // Subsequent personal message data
 	ledgerP2DiscardAddressChainCode ledgerParam2 = 0x00 // Do not return the chain code along with the address
 
 	ledgerEip155Size int = 3 // Size of the EIP-155 chain_id,r,s in unsigned transactions
@@ -116,7 +120,7 @@ func (w *ledgerDriver) offline() bool {
 func (w *ledgerDriver) Open(device io.ReadWriter, passphrase string) error {
 	w.device, w.failure = device, nil
 
-	_, err := w.ledgerDerive(accounts.DefaultBaseDerivationPath)
+	_, _, err := w.ledgerDerive(accounts.DefaultBaseDerivationPath)
 	if err != nil {
 		// Ethereum app is not running or in browser mode, nothing more to do, return
 		if err == errLedgerReplyInvalidHeader {
@@ -151,6 +155,13 @@ func (w *ledgerDriver) Heartbeat() error {
 // Derive implements usbwallet.driver, sending a derivation request to the Ledger
 // and returning the Ethereum address located on that derivation path.
 func (w *ledgerDriver) Derive(path accounts.DerivationPath) (common.Address, error) {
+	address, _, err := w.ledgerDerive(path)
+	return address, err
+}
+
+// DeriveWithPublicKey implements usbwallet.driver, sending a derivation request to the Ledger
+// and returning the Ethereum address located on that derivation path and the public key.
+func (w *ledgerDriver) DeriveWithPublicKey(path accounts.DerivationPath) (common.Address, *ecdsa.PublicKey, error) {
 	return w.ledgerDerive(path)
 }
 
@@ -190,6 +201,24 @@ func (w *ledgerDriver) SignTypedMessage(path accounts.DerivationPath, domainHash
 	}
 	// All infos gathered and metadata checks out, request signing
 	return w.ledgerSignTypedMessage(path, domainHash, messageHash)
+}
+
+// SignPersonalMessage implements usbwallet.driver, sending the message to the Ledger and
+// waiting for the user to sign or deny the transaction.
+//
+// Note: this was introduced in the ledger 1.0.8 firmware
+func (w *ledgerDriver) SignPersonalMessage(path accounts.DerivationPath, data []byte) ([]byte, error) {
+	// If the Ethereum app doesn't run, abort
+	if w.offline() {
+		return nil, accounts.ErrWalletClosed
+	}
+	// Ensure the wallet is capable of signing the given transaction
+	if w.version[0] <= 1 && w.version[1] <= 0 && w.version[2] <= 7 {
+		//lint:ignore ST1005 brand name displayed on the console
+		return nil, fmt.Errorf("Ledger version >= 1.0.8 required for personal message signing (found version v%d.%d.%d)", w.version[0], w.version[1], w.version[2])
+	}
+	// All infos gathered and metadata checks out, request signing
+	return w.ledgerSignPersonalMessage(path, data)
 }
 
 // ledgerVersion retrieves the current version of the Ethereum wallet app running
@@ -255,7 +284,7 @@ func (w *ledgerDriver) ledgerVersion() ([3]byte, error) {
 //	Ethereum address length | 1 byte
 //	Ethereum address        | 40 bytes hex ascii
 //	Chain code if requested | 32 bytes
-func (w *ledgerDriver) ledgerDerive(derivationPath []uint32) (common.Address, error) {
+func (w *ledgerDriver) ledgerDerive(derivationPath []uint32) (common.Address, *ecdsa.PublicKey, error) {
 	// Flatten the derivation path into the Ledger request
 	path := make([]byte, 1+4*len(derivationPath))
 	path[0] = byte(len(derivationPath))
@@ -265,26 +294,32 @@ func (w *ledgerDriver) ledgerDerive(derivationPath []uint32) (common.Address, er
 	// Send the request and wait for the response
 	reply, err := w.ledgerExchange(ledgerOpRetrieveAddress, ledgerP1DirectlyFetchAddress, ledgerP2DiscardAddressChainCode, path)
 	if err != nil {
-		return common.Address{}, err
+		return common.Address{}, nil, err
 	}
-	// Discard the public key, we don't need that for now
+	// Extract the public key
 	if len(reply) < 1 || len(reply) < 1+int(reply[0]) {
-		return common.Address{}, errors.New("reply lacks public key entry")
+		return common.Address{}, nil, errors.New("reply lacks public key entry")
 	}
+	pubkeyBz := reply[1 : 1+int(reply[0])]
+	pubkey, err := crypto.UnmarshalPubkey(pubkeyBz)
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+
 	reply = reply[1+int(reply[0]):]
 
 	// Extract the Ethereum hex address string
 	if len(reply) < 1 || len(reply) < 1+int(reply[0]) {
-		return common.Address{}, errors.New("reply lacks address entry")
+		return common.Address{}, nil, errors.New("reply lacks address entry")
 	}
 	hexstr := reply[1 : 1+int(reply[0])]
 
 	// Decode the hex string into an Ethereum address and return
 	var address common.Address
 	if _, err = hex.Decode(address[:], hexstr); err != nil {
-		return common.Address{}, err
+		return common.Address{}, nil, err
 	}
-	return address, nil
+	return address, pubkey, nil
 }
 
 // ledgerSign sends the transaction to the Ledger wallet, and waits for the user
@@ -451,6 +486,97 @@ func (w *ledgerDriver) ledgerSignTypedMessage(derivationPath []uint32, domainHas
 	if len(reply) != crypto.SignatureLength {
 		return nil, errors.New("reply lacks signature")
 	}
+	signature := append(reply[1:], reply[0])
+	return signature, nil
+}
+
+// ledgerSignPersonalMessage sends the transaction to the Ledger wallet, and waits for the user
+// to confirm or deny the transaction.
+//
+// The signing protocol is defined as follows:
+//
+//	CLA | INS | P1 | P2 | Lc  | Le
+//	----+-----+----+----+-----+---
+//	 E0 | 08  | 00: first message data block
+//	            80 : subsequent message data block
+//	               | 00 | variable | variable
+//
+// Where the input is:
+//
+//	Description                                      | Length
+//	-------------------------------------------------+----------
+//	Number of BIP 32 derivations to perform (max 10) | 1 byte
+//	First derivation index (big endian)              | 4 bytes
+//	...                                              | 4 bytes
+//	Last derivation index (big endian)               | 4 bytes
+//	message length                                   | 4 byte
+//	message chunk                                    | variable
+//
+// And the output data is:
+//
+//	Description | Length
+//	------------+---------
+//	signature V | 1 byte
+//	signature R | 32 bytes
+//	signature S | 32 bytes
+func (w *ledgerDriver) ledgerSignPersonalMessage(derivationPath []uint32, data []byte) ([]byte, error) {
+	// Flatten the derivation path into the Ledger request
+	path := make([]byte, 1+4*len(derivationPath))
+	path[0] = byte(len(derivationPath))
+	for i, component := range derivationPath {
+		binary.BigEndian.PutUint32(path[1+4*i:], component)
+	}
+
+	var (
+		reply []byte
+		err   error
+		first = true
+	)
+
+	for len(data) > 0 {
+		// Calculate the maximum chunk size based on whether this is the first chunk
+		maxChunkSize := 150
+		if first {
+			// For first chunk, account for path length: 150 - 1 - (number of derivations * 4)
+			maxChunkSize = 150 - 1 - (len(derivationPath) * 4)
+		}
+
+		// Calculate the actual chunk size
+		chunkSize := min(maxChunkSize, len(data))
+
+		// 00000000204f38673c6f81ee55f4cb31034d04fb8fd3e62ed291eebd12339f91e26bdd615f
+
+		var buffer []byte
+		var op ledgerParam1
+		if first {
+			buffer = make([]byte, len(path)+4+chunkSize)
+			copy(buffer[:], path)
+			binary.BigEndian.PutUint32(buffer[len(path):], uint32(len(data)))
+			copy(buffer[len(path)+4:], data[:chunkSize])
+			op = ledgerP1PersonalMessageData
+		} else {
+			buffer = make([]byte, chunkSize)
+			copy(buffer[:], data[:chunkSize])
+			op = ledgerP1ContPersonalMessageData
+		}
+
+		// Send the chunk over, ensuring it's processed correctly
+		reply, err = w.ledgerExchange(ledgerOpSignPersonalMessage, op, 0, buffer)
+		if err != nil {
+			return nil, err
+		}
+
+		// Shift the data and ensure subsequent chunks are marked as such
+		data = data[chunkSize:]
+		first = false
+	}
+
+	// Extract the Ethereum signature and do a sanity validation
+	if len(reply) != crypto.SignatureLength {
+		return nil, errors.New("reply lacks signature")
+	}
+
+	// Adjust signature format: Ledger returns [v, r, s] but we need [r, s, v]
 	signature := append(reply[1:], reply[0])
 	return signature, nil
 }

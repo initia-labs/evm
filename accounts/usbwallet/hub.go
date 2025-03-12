@@ -26,7 +26,8 @@ import (
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/karalabe/hid"
+
+	"github.com/zondax/hid"
 )
 
 // LedgerScheme is the protocol scheme prefixing account and wallet URLs.
@@ -170,15 +171,15 @@ func (hub *Hub) refreshWallets() {
 			return
 		}
 	}
-	infos, err := hid.Enumerate(hub.vendorID, 0)
-	if err != nil {
+	infos := hid.Enumerate(hub.vendorID, 0)
+	if infos == nil {
 		failcount := hub.enumFails.Add(1)
 		if runtime.GOOS == "linux" {
 			// See rationale before the enumeration why this is needed and only on Linux.
 			hub.commsLock.Unlock()
 		}
 		log.Error("Failed to enumerate USB devices", "hub", hub.scheme,
-			"vendor", hub.vendorID, "failcount", failcount, "err", err)
+			"vendor", hub.vendorID, "failcount", failcount)
 		return
 	}
 	hub.enumFails.Store(0)

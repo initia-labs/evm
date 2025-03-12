@@ -19,6 +19,7 @@ package usbwallet
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"fmt"
 	"io"
 	"math/big"
@@ -31,7 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/karalabe/hid"
+	"github.com/zondax/hid"
 )
 
 // Maximum time between wallet health checks to detect USB unplugs.
@@ -80,7 +81,7 @@ type wallet struct {
 	url    *accounts.URL // Textual URL uniquely identifying this wallet
 
 	info   hid.DeviceInfo // Known USB device infos about the wallet
-	device hid.Device     // USB device advertising itself as a hardware wallet
+	device *hid.Device    // USB device advertising itself as a hardware wallet
 
 	accounts []accounts.Account                         // List of derive accounts pinned on the hardware wallet
 	paths    map[common.Address]accounts.DerivationPath // Known derivation paths for signing operations
@@ -463,7 +464,18 @@ func (w *wallet) Derive(path accounts.DerivationPath, pin bool) (accounts.Accoun
 		return accounts.Account{}, accounts.ErrWalletClosed
 	}
 	<-w.commsLock // Avoid concurrent hardware access
-	address, err := w.driver.Derive(path)
+
+	var (
+		address common.Address
+		pubkey  *ecdsa.PublicKey
+		err     error
+	)
+	if driver, ok := w.driver.(*ledgerDriver); ok {
+		address, pubkey, err = driver.DeriveWithPublicKey(path)
+	} else {
+		address, err = w.driver.Derive(path)
+	}
+
 	w.commsLock <- struct{}{}
 
 	w.stateLock.RUnlock()
@@ -474,6 +486,7 @@ func (w *wallet) Derive(path accounts.DerivationPath, pin bool) (accounts.Accoun
 	}
 	account := accounts.Account{
 		Address: address,
+		Pubkey:  pubkey,
 		URL:     accounts.URL{Scheme: w.url.Scheme, Path: fmt.Sprintf("%s/%s", w.url.Path, path)},
 	}
 	if !pin {
@@ -528,6 +541,48 @@ func (w *wallet) signHash(account accounts.Account, hash []byte) ([]byte, error)
 	return nil, accounts.ErrNotSupported
 }
 
+// signPersonalMessage signing arbitrary data
+func (w *wallet) signPersonalMessage(account accounts.Account, data []byte) ([]byte, error) {
+	w.stateLock.Lock()
+	defer w.stateLock.Unlock()
+
+	// handle ledger signing
+	if driver, ok := w.driver.(*ledgerDriver); ok {
+		// If the wallet is closed, abort
+		if w.device == nil {
+			return nil, accounts.ErrWalletClosed
+		}
+		// Make sure the requested account is contained within
+		path, ok := w.paths[account.Address]
+		if !ok {
+			return nil, accounts.ErrUnknownAccount
+		}
+		// All infos gathered and metadata checks out, request signing
+		<-w.commsLock
+		defer func() { w.commsLock <- struct{}{} }()
+
+		// Ensure the device isn't screwed with while user confirmation is pending
+		// TODO(karalabe): remove if hotplug lands on Windows
+		w.hub.commsLock.Lock()
+		w.hub.commsPend++
+		w.hub.commsLock.Unlock()
+
+		defer func() {
+			w.hub.commsLock.Lock()
+			w.hub.commsPend--
+			w.hub.commsLock.Unlock()
+		}()
+		// sign the message
+		signature, err := driver.SignPersonalMessage(path, data)
+		if err != nil {
+			return nil, err
+		}
+		return signature, nil
+	}
+
+	return nil, accounts.ErrNotSupported
+}
+
 // SignData signs keccak256(data). The mimetype parameter describes the type of data being signed
 func (w *wallet) SignData(account accounts.Account, mimeType string, data []byte) ([]byte, error) {
 	// Unless we are doing 712 signing, simply dispatch to signHash
@@ -579,7 +634,7 @@ func (w *wallet) SignDataWithPassphrase(account accounts.Account, passphrase, mi
 }
 
 func (w *wallet) SignText(account accounts.Account, text []byte) ([]byte, error) {
-	return w.signHash(account, accounts.TextHash(text))
+	return w.signPersonalMessage(account, text)
 }
 
 // SignTx implements accounts.Wallet. It sends the transaction over to the Ledger
