@@ -166,6 +166,12 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	in.evm.depth++
 	defer func() { in.evm.depth-- }()
 
+	// INITIA CUSTOM
+	originDisableCosmosDispatch := in.evm.GetDisallowCosmosDispatch()
+	defer func() {
+		in.evm.SetDisallowCosmosDispatch(originDisableCosmosDispatch)
+	}()
+
 	// Make sure the readOnly is only set if we aren't in readOnly yet.
 	// This also makes sure that the readOnly flag isn't removed for child calls.
 	if readOnly && !in.readOnly {

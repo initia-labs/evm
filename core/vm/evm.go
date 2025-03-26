@@ -114,6 +114,22 @@ type EVM struct {
 	callGasTemp uint64
 	// precompiles holds the precompiled contracts for the current epoch
 	precompiles map[common.Address]PrecompiledContract
+
+	// INITIA CUSTOM
+	// disallowCosmosDispatch is a flag that is used to determine if the EVM should disallow Cosmos dispatch
+	disallowCosmosDispatch bool
+}
+
+// INITIA CUSTOM
+// SetDisallowCosmosDispatch sets the disallowCosmosDispatch flag
+func (evm *EVM) SetDisallowCosmosDispatch(value bool) {
+	evm.disallowCosmosDispatch = value
+}
+
+// INITIA CUSTOM
+// GetDisallowCosmosDispatch returns the disallowCosmosDispatch flag
+func (evm *EVM) GetDisallowCosmosDispatch() bool {
+	return evm.disallowCosmosDispatch
 }
 
 // NewEVM returns a new EVM. The returned EVM is not thread safe and should
