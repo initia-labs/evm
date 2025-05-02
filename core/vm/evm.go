@@ -132,6 +132,18 @@ func (evm *EVM) GetDisallowCosmosDispatch() bool {
 	return evm.disallowCosmosDispatch
 }
 
+// INITIA CUSTOM
+// IncreaseDepth increases the depth of the EVM
+func (evm *EVM) IncreaseDepth() {
+	evm.depth++
+}
+
+// INITIA CUSTOM
+// DecreaseDepth decreases the depth of the EVM
+func (evm *EVM) DecreaseDepth() {
+	evm.depth--
+}
+
 // NewEVM returns a new EVM. The returned EVM is not thread safe and should
 // only ever be used *once*.
 func NewEVM(blockCtx BlockContext, txCtx TxContext, statedb StateDB, chainConfig *params.ChainConfig, config Config) *EVM {
