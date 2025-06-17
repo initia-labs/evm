@@ -131,6 +131,21 @@ func MergeBloom(receipts Receipts) Bloom {
 	return bin
 }
 
+// RECOVER: this function is deprecated in recent evm versions, but we keep it for compatibility in minievm
+// LogsBloom returns the bloom bytes for the given logs
+func LogsBloom(logs []*Log) []byte {
+	buf := make([]byte, 6)
+	var bin Bloom
+	for _, log := range logs {
+		bin.add(log.Address.Bytes(), buf)
+		for _, b := range log.Topics {
+			bin.add(b[:], buf)
+		}
+	}
+	return bin[:]
+}
+
+
 // Bloom9 returns the bloom filter for the given data
 func Bloom9(data []byte) []byte {
 	var b Bloom
