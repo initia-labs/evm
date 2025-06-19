@@ -152,10 +152,6 @@ func (evm *EVM) IncreaseDepth() {
 // DecreaseDepth decreases the depth of the EVM
 func (evm *EVM) DecreaseDepth() {
 	evm.depth--
-
-	// jumpDests is the aggregated result of JUMPDEST analysis made through
-	// the life cycle of EVM.
-	jumpDests map[common.Hash]bitvec
 }
 
 // NewEVM constructs an EVM instance with the supplied block context, state
@@ -173,14 +169,6 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 	}
 	evm.precompiles = activePrecompiledContracts(evm.chainRules)
 	evm.interpreter = NewEVMInterpreter(evm)
-	return evm
-}
-
-// NewEVMWithPrecompiles returns a new EVM with the given precompiled contracts.
-// The returned EVM is not thread safe and should only ever be used *once*.
-func NewEVMWithPrecompiles(blockCtx BlockContext, txCtx TxContext, statedb StateDB, chainConfig *params.ChainConfig, config Config, precompiles PrecompiledContracts) *EVM {
-	evm := NewEVM(blockCtx, txCtx, statedb, chainConfig, config)
-	evm.precompiles = precompiles
 	return evm
 }
 

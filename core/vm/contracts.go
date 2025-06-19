@@ -49,7 +49,7 @@ type PrecompiledContract interface {
 
 type ExtendedPrecompiledContract interface {
 	ExtendedRun(
-		caller ContractRef,
+		caller common.Address,
 		input []byte,
 		suppliedGas uint64,
 		readOnly bool,
@@ -247,7 +247,7 @@ func RunPrecompiledContract(p PrecompiledContract, input []byte, suppliedGas uin
 // - any error that occurred
 func ExtendedRunPrecompiledContract(
 	p PrecompiledContract,
-	caller ContractRef,
+	caller common.Address,
 	input []byte,
 	suppliedGas uint64,
 	readOnly bool,
