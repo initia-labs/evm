@@ -137,6 +137,30 @@ func (a *SetCodeAuthorization) Authority() (common.Address, error) {
 	return addr, nil
 }
 
+// AuthorityWithPubKey recovers the the authorizing account of an authorization.
+func (a *SetCodeAuthorization) AuthorityWithPubKey() (common.Address, []byte, error) {
+	sighash := a.sigHash()
+	if !crypto.ValidateSignatureValues(a.V, a.R.ToBig(), a.S.ToBig(), true) {
+		return common.Address{}, nil, ErrInvalidSig
+	}
+	// encode the signature in uncompressed format
+	var sig [crypto.SignatureLength]byte
+	a.R.WriteToSlice(sig[:32])
+	a.S.WriteToSlice(sig[32:64])
+	sig[64] = a.V
+	// recover the public key from the signature
+	pub, err := crypto.Ecrecover(sighash[:], sig[:])
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+	if len(pub) == 0 || pub[0] != 4 {
+		return common.Address{}, nil, errors.New("invalid public key")
+	}
+	var addr common.Address
+	copy(addr[:], crypto.Keccak256(pub[1:])[12:])
+	return addr, pub, nil
+}
+
 // copy creates a deep copy of the transaction data and initializes all fields.
 func (tx *SetCodeTx) copy() TxData {
 	cpy := &SetCodeTx{
