@@ -155,6 +155,23 @@ func (evm *EVM) DecreaseDepth() {
 	evm.depth--
 }
 
+// INITIA CUSTOM
+// snapshotDiscarder is implemented by state databases whose snapshots hold
+// resources that must be released once a call frame finishes successfully.
+type snapshotDiscarder interface {
+	DiscardSnapshot(revid int)
+}
+
+// INITIA CUSTOM
+// discardSnapshot tells the state database that the call frame which took
+// the given snapshot returned without error, so the snapshot will never be
+// reverted to and can be folded into its parent.
+func (evm *EVM) discardSnapshot(snapshot int) {
+	if d, ok := evm.StateDB.(snapshotDiscarder); ok {
+		d.DiscardSnapshot(snapshot)
+	}
+}
+
 // NewEVM constructs an EVM instance with the supplied block context, state
 // database and several configs. It meant to be used throughout the entire
 // state transition of a block, with the transaction context switched as
@@ -230,6 +247,13 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 		return nil, gas, ErrInsufficientBalance
 	}
 	snapshot := evm.StateDB.Snapshot()
+
+	// INITIA CUSTOM: release the snapshot when the frame succeeds
+	defer func() {
+		if err == nil {
+			evm.discardSnapshot(snapshot)
+		}
+	}()
 	p, isPrecompile := evm.precompile(addr)
 
 	if !evm.StateDB.Exist(addr) {
@@ -314,6 +338,13 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 	}
 	var snapshot = evm.StateDB.Snapshot()
 
+	// INITIA CUSTOM: release the snapshot when the frame succeeds
+	defer func() {
+		if err == nil {
+			evm.discardSnapshot(snapshot)
+		}
+	}()
+
 	// It is allowed to call precompiles, even via delegatecall
 	if p, isPrecompile := evm.precompile(addr); isPrecompile {
 		ret, gas, err = ExtendedRunPrecompiledContract(p, caller, input, gas, false, evm.Config.Tracer)
@@ -356,6 +387,13 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 		return nil, gas, ErrDepth
 	}
 	var snapshot = evm.StateDB.Snapshot()
+
+	// INITIA CUSTOM: release the snapshot when the frame succeeds
+	defer func() {
+		if err == nil {
+			evm.discardSnapshot(snapshot)
+		}
+	}()
 
 	// It is allowed to call precompiles, even via delegatecall
 	if p, isPrecompile := evm.precompile(addr); isPrecompile {
@@ -403,6 +441,13 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 	// then certain tests start failing; stRevertTest/RevertPrecompiledTouchExactOOG.json.
 	// We could change this, but for now it's left for legacy reasons
 	var snapshot = evm.StateDB.Snapshot()
+
+	// INITIA CUSTOM: release the snapshot when the frame succeeds
+	defer func() {
+		if err == nil {
+			evm.discardSnapshot(snapshot)
+		}
+	}()
 
 	// We do an AddBalance of zero here, just in order to trigger a touch.
 	// This doesn't matter on Mainnet, where all empties are gone at the time of Byzantium,
@@ -495,6 +540,13 @@ func (evm *EVM) create(caller common.Address, code []byte, gas uint64, value *ui
 	// It might be possible the contract code is deployed to a pre-existent
 	// account with non-zero balance.
 	snapshot := evm.StateDB.Snapshot()
+
+	// INITIA CUSTOM: release the snapshot when the frame succeeds
+	defer func() {
+		if err == nil {
+			evm.discardSnapshot(snapshot)
+		}
+	}()
 	if !evm.StateDB.Exist(address) {
 		evm.StateDB.CreateAccount(address)
 	}
